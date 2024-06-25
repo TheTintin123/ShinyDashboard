@@ -9,9 +9,9 @@ library(sp)
 library(maps)
 
 # Load data
-airports <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat", header=F, sep=",")
-flights <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat", header=F, sep=",")
-airlines <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat", header=F, sep=",") %>% dplyr::select(V2, V4)
+airports <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat", header=F, sep=",",fileEncoding = "UTF-8")
+flights <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat", header=F, sep=",",fileEncoding = "UTF-8")
+airlines <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat", header=F, sep=",",fileEncoding = "UTF-8") %>% dplyr::select(V2, V4)
 
 # Define column names
 colnames(flights) <- c("Airline_code", "c2", "origin", "c4", "destination", "c6", "c7", "c8","c9")
@@ -32,12 +32,6 @@ colnames(all_data0) <- c("Airline_code", "origin", "destination", "City_origin",
 all_data_filtered <- all_data0 %>% filter(City_origin != "")
 
 all_data <- na.omit(all_data_filtered)
-
-# Adjust city names for encoding issues
-all_data$city <- dplyr::recode(all_data$city,
-                               "Ã–stersund, Sweden" = "Oestersund, Sweden",
-                               "Ã„ngelholm, Sweden" = "Aengelholm, Sweden",
-                               "Ã‡orlu, Turkey" = "Corlu, Turkey")
 
 to_radians <- function(degrees) {
   return(degrees * pi / 180)
@@ -64,6 +58,9 @@ haversine <- function(lat1, lon1, lat2, lon2) {
 # Shiny UI
 ui <- bootstrapPage(
   useShinyjs(),
+  tags$head(
+    tags$meta(charset = "UTF-8")
+  ),
   tags$style(type = "text/css", "html, body {width:100%;height:100%}"),
   leafletOutput("map", width = "100%", height = "100%"),
   absolutePanel(top = 60, right = 10,
@@ -89,6 +86,7 @@ ui <- bootstrapPage(
 
 # Shiny Server
 server <- function(input, output, session) {
+  shinyjs::useShinyjs()
   
   # Reactive expression to filter airports based on selected country
   filtered_data <- reactive({
@@ -228,35 +226,31 @@ server <- function(input, output, session) {
   observe({
     data <- Dataframe2()
     
-    national_available <- data %>%
-      filter(Country_origin == Country_dest) %>%
-      nrow() > 0
-    
-    international_available <- data %>%
-      filter(Country_origin != Country_dest) %>%
-      nrow() > 0
-    
-    print(paste("National available:", national_available))
-    print(paste("International available:", international_available))
+    national_available <- nrow(data[data$Country_origin == data$Country_dest, , drop = FALSE]) > 0
+    international_available <- nrow(data[data$Country_origin != data$Country_dest, , drop = FALSE]) > 0
     
     if (national_available && international_available) {
-      enable("national")  # Enable the "National" radio button
-      enable("international")  # Enable the "International" radio button
-      enable("both")  # Enable the "Both" radio button
+      shinyjs::enable("flight_type")
     } else if (national_available) {
-      enable("national")  # Enable the "National" radio button
-      disable("international") # Disable the "International" radio button
-      disable("both") # Disable the "Both" radio button
+      shinyjs::disable("international")
+      shinyjs::disable("both")
+      if (input$flight_type != "national") {
+        updateRadioButtons(session, "flight_type", selected = "national")
+      }
     } else if (international_available) {
-      disable("national") # Disable the "National" radio button
-      enable("international")  # Enable the "International" radio button
-      disable("both") # Disable the "Both" radio button
+      shinyjs::disable("national")
+      shinyjs::disable("both")
+      if (input$flight_type != "international") {
+        updateRadioButtons(session, "flight_type", selected = "international")
+      }
     } else {
-      disable("national") # Disable the "National" radio button
-      disable("international") # Disable the "International" radio button
-      disable("both") # Disable the "Both" radio button
+      shinyjs::disable("national")
+      shinyjs::disable("international")
+      shinyjs::disable("both")
+      updateRadioButtons(session, "flight_type", selected = "both")
     }
   })
+  
   
   output$map <- renderLeaflet({
     data <- Dataframe2()
