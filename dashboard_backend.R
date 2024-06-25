@@ -1,128 +1,96 @@
-install.packages("shiny")
-install.packages("leaflet")
-install.packages("dplyr")
-install.packages("geosphere")
-install.packages("plyr")
-install.packages("sf")
-
-# Load necessary libraries
 library(shiny)
 library(leaflet)
 library(dplyr)
 library(geosphere)
 library(plyr)
-library(sf)
 library(ggplot2)
+library(sp)
+library(maps)
 
-# Load the datasets
-airports <- read.csv("C:/Users/josef/Documents/projects/ShinyDashboard/FlightMap/data/airports.csv", header=FALSE, sep=",")
-routes <- read.csv("C:/Users/josef/Documents/projects/ShinyDashboard/FlightMap/data/routes.csv", header=FALSE, sep=",")
-airlines <- read.csv("C:/Users/josef/Documents/projects/ShinyDashboard/FlightMap/data/airlines.csv", header=FALSE, sep=",") %>% dplyr::select(V2, V4)
+# Load data
+airports <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat", header=F, sep=",")
+flights <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat", header=F, sep=",")
+airlines <- read.csv("https://raw.githubusercontent.com/jpatokal/openflights/master/data/airlines.dat", header=F, sep=",") %>% dplyr::select(V2, V4)
 
-# Rename columns for clarity
-colnames(routes) <- c("Airline_code", "c2", "origin", "c4", "destination", "c6", "c7", "c8", "c9")
+# Define column names
+colnames(flights) <- c("Airline_code", "c2", "origin", "c4", "destination", "c6", "c7", "c8","c9")
+colnames(airports) <- c("Airport_ID", "Name", "City", "Country", "IATA", "ICAO", "Latitude", "Longitude", "Altitude", "Timezone", "DST", "Tz", "Type", "Source")
+colnames(airlines) <- c("Name", "Airline_code")
 
-# Merge datasets
-all_data0 <- dplyr::select(routes, Airline_code, origin, destination) %>%
-  dplyr::left_join(airports[, c("V3", "V4", "V5", "V7", "V8")], by = c("origin" = "V5")) %>%
-  dplyr::left_join(airports[, c("V3", "V4", "V5", "V7", "V8")], by = c("destination" = "V5")) %>%
-  dplyr::left_join(airlines, by = c("Airline_code" = "V4")) %>%
-  mutate(city = paste(V3.x, ", ", V4.x, sep = ""))
+# Combine datasets
+all_data0 <- flights %>%
+  dplyr::select(Airline_code, origin, destination) %>%
+  dplyr::left_join(airports[, c("City", "Country", "IATA", "Latitude", "Longitude")], by = c("origin" = "IATA")) %>%
+  dplyr::left_join(airports[, c("City", "Country", "IATA", "Latitude", "Longitude")], by = c("destination" = "IATA")) %>%
+  dplyr::left_join(airlines, by = "Airline_code") %>%
+  mutate(city = paste(City.x, ", ", Country.x, sep = ""))
 
-# Rename columns
-colnames(all_data0) <- c("Airline_code", "origin", "destination", "city1", "country", "lat_ori", "lng_ori", "city_dest", "country_dest", "lat_dest", "lng_dest", "airline", "city")
+colnames(all_data0) <- c("Airline_code", "origin", "destination", "City_origin", "Country_origin", "Latitude_origin", "Longitude_origin", "City_dest", "Country_dest", "Latitude_dest", "Longitude_dest", "airline", "city")
 
-# Convert lat/lng columns to numeric
-all_data0$lat_ori <- as.numeric(all_data0$lat_ori)
-all_data0$lng_ori <- as.numeric(all_data0$lng_ori)
-all_data0$lat_dest <- as.numeric(all_data0$lat_dest)
-all_data0$lng_dest <- as.numeric(all_data0$lng_dest)
-
-# Remove rows with missing values
 all_data <- na.omit(all_data0)
 
-# Correct city names with special characters
+# Adjust city names for encoding issues
 all_data$city <- dplyr::recode(all_data$city,
-                               "Ã–stersund, Sweden" = "Oestersund, Sweden",
-                               "Ã„ngelholm, Sweden" = "Aengelholm, Sweden",
-                               "Ã‡orlu, Turkey" = "Corlu, Turkey")
+                               "�-stersund, Sweden" = "Oestersund, Sweden",
+                               "�"ngelholm, Sweden" = "Aengelholm, Sweden",
+                               "�???orlu, Turkey" = "Corlu, Turkey")
 
-# Define UI
-ui <- fluidPage(
+# Shiny UI
+ui <- bootstrapPage(
   tags$style(type = "text/css", "html, body {width:100%;height:100%}"),
   leafletOutput("map", width = "100%", height = "100%"),
   absolutePanel(top = 60, right = 10,
                 selectInput("origin", "Origin",
                             selected = "Brisbane, Australia",
-                            levels(factor(all_data$city))),
+                            choices = levels(factor(all_data$city))),
                 style = "opacity: 0.65; z-index: 1000;")
 )
 
-# Define server logic
+# Shiny Server
 server <- function(input, output, session) {
-  
   Dataframe2 <- reactive({
-    data <- all_data[all_data$city %in% input$origin,]
-    data
+    all_data %>% filter(city == input$origin)
   })
   
   output$map <- renderLeaflet({
     data <- Dataframe2()
     
-    df2 <- gcIntermediate(as.matrix(data[, c("lng_ori", "lat_ori")]),
-                          as.matrix(data[, c("lng_dest", "lat_dest")]),
-                          n = 100,
-                          addStartEnd = TRUE,
-                          sp = TRUE,
-                          breakAtDateLine = FALSE)
+    df2 <- gcIntermediate(as.matrix(data[,c("Longitude_origin", "Latitude_origin")]),
+                          as.matrix(data[,c("Longitude_dest", "Latitude_dest")]),
+                          n=100, addStartEnd=TRUE, sp=TRUE, breakAtDateLine=FALSE)
     df2 <- as(df2, "SpatialLinesDataFrame")
     df2.ff <- fortify(df2)
     
     data$id <- as.character(c(1:nrow(data))) 
-    gcircles <- merge(df2.ff, data, all.x = TRUE, by = "id")
+    gcircles <- merge(df2.ff, data, all.x=T, by="id")
     
-    if (data$lng_ori[1] > 0) {
-      center <- data$lng_ori[1]
-    } else {
-      center <- data$lng_ori[1] + 360
-    }
+    center <- ifelse(data$Longitude_origin[1] > 0, data$Longitude_origin[1], data$Longitude_origin[1] + 360)
     
     gcircles$long.recenter <- ifelse(gcircles$long < center - 180, gcircles$long + 360, gcircles$long)
-    data$long.ori.recenter <- ifelse(data$lng_ori < center - 180, data$lng_ori + 360, data$lng_ori)
-    data$long.dest.recenter <- ifelse(data$lng_dest < center - 180, data$lng_dest + 360, data$lng_dest)
+    data$long.ori.recenter <- ifelse(data$Longitude_origin < center - 180, data$Longitude_origin + 360, data$Longitude_origin)
+    data$long.dest.recenter <- ifelse(data$Longitude_dest < center - 180, data$Longitude_dest + 360, data$Longitude_dest)
     
     test_line <- sf::st_as_sf(gcircles, coords = c("long.recenter", "lat")) %>%
       dplyr::group_by(id, piece) %>%
-      dplyr::summarize(do_union = FALSE) %>%
+      dplyr::summarize(do_union=FALSE) %>%
       sf::st_cast("LINESTRING") %>%
       dplyr::ungroup()
     
     test_line2 <- dplyr::left_join(test_line, data)
     
-    labels <- sprintf(
-      "<strong>%s, </strong> %s",
-      data$city_dest, data$country_dest) %>% lapply(htmltools::HTML)
+    labels <- sprintf("<strong>%s, </strong> %s", data$City_dest, data$Country_dest) %>% lapply(htmltools::HTML)
     
-    m <- leaflet(data = test_line2) %>%
+    leaflet(data = test_line2) %>%
       addTiles() %>%
       addProviderTiles(providers$CartoDB.Positron, group = "Carto DB Positron") %>%
       addProviderTiles(providers$CartoDB.DarkMatterNoLabels, group = "Carto DB dark") %>%
       addPolylines(weight = 1, opacity = 0.5, color = "#820a0a", label = ~airline) %>%
-      addCircleMarkers(data = data, lng = ~long.ori.recenter, lat = ~lat_ori, radius = 0.5, fillOpacity = 0.1,
-                       weight = 2, opacity = 0.1, color = "red") %>%
-      addCircleMarkers(data = data, lng = ~long.dest.recenter, lat = ~lat_dest, radius = 1, label = labels) %>%
+      addCircleMarkers(data = data, lng = ~long.ori.recenter, lat = ~Latitude_origin, radius = 0.5, fillOpacity = 0.1, weight = 2, opacity = 0.1, color = "red") %>%
+      addCircleMarkers(data = data, lng = ~long.dest.recenter, lat = ~Latitude_dest, radius = 1, label = labels) %>%
       addLayersControl(baseGroups = c("Carto DB Positron", "Carto DB dark"))
-    m
   })
 }
 
 # Run the application 
 shinyApp(ui = ui, server = server)
-
-
-
-
-
-
-
 
