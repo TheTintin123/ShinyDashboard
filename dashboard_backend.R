@@ -34,9 +34,31 @@ all_data <- na.omit(all_data_filtered)
 
 # Adjust city names for encoding issues
 all_data$city <- dplyr::recode(all_data$city,
-                               "Ã–stersund, Sweden" = "Oestersund, Sweden",
-                               "Ã„ngelholm, Sweden" = "Aengelholm, Sweden",
-                               "Ã‡orlu, Turkey" = "Corlu, Turkey")
+                               "�-stersund, Sweden" = "Oestersund, Sweden",
+                               "�"ngelholm, Sweden" = "Aengelholm, Sweden",
+                               "�???orlu, Turkey" = "Corlu, Turkey")
+
+to_radians <- function(degrees) {
+  return(degrees * pi / 180)
+}
+
+haversine <- function(lat1, lon1, lat2, lon2) {
+  # Convert degrees to radians
+  lat1 <- to_radians(lat1)
+  lon1 <- to_radians(lon1)
+  lat2 <- to_radians(lat2)
+  lon2 <- to_radians(lon2)
+  
+  # Haversine formula
+  dlon <- lon2 - lon1
+  dlat <- lat2 - lat1
+  a <- sin(dlat/2)^2 + cos(lat1) * cos(lat2) * sin(dlon/2)^2
+  c <- 2 * atan2(sqrt(a), sqrt(1-a))
+  # Radius of the earth in kilometers is 6371
+  distance <- 6371 * c
+  
+  return(distance)  # Distance in kilometers
+}
 
 # Shiny UI
 ui <- bootstrapPage(
@@ -51,6 +73,14 @@ ui <- bootstrapPage(
                                choices = sort(unique(all_data$city)),
                                options = list(maxOptions = 8000)),
                 sliderInput("destinations", "Number of Destinations", min = 1, max = 100, value = 5),
+                selectInput("destination", "Destination",
+                            selected = NULL,
+                            choices = NULL),
+                radioButtons("flight_type", "Flight Type",
+                             choices = list("National" = "national", "International" = "international", "Both" = "both"),
+                             selected = "both"),
+                textInput("distance_output", "Distance"),
+                numericInput("max_distance", "Max Distance (km)", value = 20000, min = 0, step = 100),
                 style = "opacity: 0.65; z-index: 1000;")
 )
 
@@ -65,6 +95,49 @@ server <- function(input, output, session) {
       all_data %>% filter(Country_origin == input$country)
     }
   })
+  
+  observeEvent(input$origin, {
+    dest_choices <- all_data %>%
+      filter(city == input$origin) %>%
+      mutate(dest_city = paste(City_dest, ", ", Country_dest, sep = "")) %>%
+      pull(dest_city)
+    
+    dest_choices <- c("All", dest_choices)
+    updateSelectInput(session, "destination", choices = dest_choices, selected = dest_choices[1])
+  })
+  
+  # observeEvent(input$destination, {
+  #   if(input$destination != "All" && input$destination != ""){
+  #     splitter1 <- strsplit(input$origin, ",")[[1]][1]
+  #     splitter2 <- strsplit(input$destination, ",")[[1]][1]
+  #     
+  #     origin_coords <- all_data %>%
+  #       filter(City_origin == input$origin) %>%
+  #       select(Latitude_origin, Longitude_origin) %>%
+  #       slice(1)  # Assuming there is only one origin match
+  #     
+  #     print(origin_coords)
+  #     
+  #     dest_coords <- all_data %>%
+  #       filter(City_dest == input$destination) %>%
+  #       select(Latitude_dest, Longitude_dest) %>%
+  #       slice(1)  # Assuming there is only one destination match
+  #     
+  #     # print(dest_coords)
+  #   
+  #     if (nrow(origin_coords) > 0 & nrow(dest_coords) > 0) {
+  #       # Calculate distance using haversine function
+  #       distance <- haversine(origin_coords$Latitude_origin, 
+  #                             origin_coords$Longitude_origin, 
+  #                             dest_coords$Latitude_dest, 
+  #                             dest_coords$Longitude_dest)
+  #       
+  #       print(paste("Distance from", splitter1, "to", splitter2, "is", distance, "km"))
+  #     } else {
+  #       print("Error: Could not find coordinates for origin or destination.")
+  #     }
+  #   }
+  # })
   
   # Reactive expression to determine valid origin choices based on selected number of destinations
   valid_origins <- reactive({
@@ -105,7 +178,17 @@ server <- function(input, output, session) {
       data <- data %>% group_by(city) %>% filter(n_distinct(destination) >= input$destinations)
     }
     
-    data
+    if(input$destination != "All"){
+      data <- data %>% filter(paste(City_dest, ", ", Country_dest, sep = "") == input$destination)
+    }
+    
+    if (input$flight_type == "national") {
+      data <- data %>% filter(Country_origin == Country_dest)
+    } else if (input$flight_type == "international") {
+      data <- data %>% filter(Country_origin != Country_dest)
+    }
+    
+    return(data)
   })
   
   output$map <- renderLeaflet({
@@ -149,6 +232,23 @@ server <- function(input, output, session) {
       addCircleMarkers(data = data, lng = ~long.dest.recenter, lat = ~Latitude_dest, radius = 1, label = labels) %>%
       addLayersControl(baseGroups = c("Carto DB Positron", "Carto DB dark"))
   })
+  
+  # observeEvent(input$map_marker_click, {
+  #   click <- input$map_marker_click
+  #   print(click)
+  #   if (!is.null(click)) {
+  #     clicked_dest <- all_data %>%
+  #       filter(Longitude_dest == click$lng, Latitude_dest == click$lat) %>%
+  #       mutate(city = paste(City_dest, ", ", Country_dest, sep = "")) %>%
+  #       pull(city) %>%
+  #       unique()
+  #     
+  #     print(clicked_dest)
+  #     if (length(clicked_dest) > 0) {
+  #       updateSelectInput(session, "origin", selected = clicked_dest[1])
+  #     }
+  #   }
+  # })
 }
 
 # Run the application 
