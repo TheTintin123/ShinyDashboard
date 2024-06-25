@@ -23,37 +23,97 @@ all_data0 <- flights %>%
   dplyr::left_join(airports[, c("City", "Country", "IATA", "Latitude", "Longitude")], by = c("origin" = "IATA")) %>%
   dplyr::left_join(airports[, c("City", "Country", "IATA", "Latitude", "Longitude")], by = c("destination" = "IATA")) %>%
   dplyr::left_join(airlines, by = "Airline_code") %>%
-  mutate(city = paste(City.x, ", ", Country.x, sep = ""))
+  mutate(city = paste(City.x, ", ", Country.x, sep = "")) %>%
+  distinct(origin, destination, .keep_all = TRUE)
 
 colnames(all_data0) <- c("Airline_code", "origin", "destination", "City_origin", "Country_origin", "Latitude_origin", "Longitude_origin", "City_dest", "Country_dest", "Latitude_dest", "Longitude_dest", "airline", "city")
 
-all_data <- na.omit(all_data0)
+all_data_filtered <- all_data0 %>% filter(City_origin != "")
+
+all_data <- na.omit(all_data_filtered)
 
 # Adjust city names for encoding issues
 all_data$city <- dplyr::recode(all_data$city,
-                               "�-stersund, Sweden" = "Oestersund, Sweden",
-                               "�"ngelholm, Sweden" = "Aengelholm, Sweden",
-                               "�???orlu, Turkey" = "Corlu, Turkey")
+                               "Ã–stersund, Sweden" = "Oestersund, Sweden",
+                               "Ã„ngelholm, Sweden" = "Aengelholm, Sweden",
+                               "Ã‡orlu, Turkey" = "Corlu, Turkey")
 
 # Shiny UI
 ui <- bootstrapPage(
   tags$style(type = "text/css", "html, body {width:100%;height:100%}"),
   leafletOutput("map", width = "100%", height = "100%"),
   absolutePanel(top = 60, right = 10,
-                selectInput("origin", "Origin",
-                            selected = "Brisbane, Australia",
-                            choices = levels(factor(all_data$city))),
+                selectInput("country", "Country", 
+                            choices = c("All countries", sort(unique(all_data$Country_origin))),
+                            selected = "All countries"),
+                selectizeInput("origin", "Origin",
+                               selected = "Graz, Austria",
+                               choices = sort(unique(all_data$city)),
+                               options = list(maxOptions = 8000)),
+                sliderInput("destinations", "Number of Destinations", min = 1, max = 100, value = 5),
                 style = "opacity: 0.65; z-index: 1000;")
 )
 
 # Shiny Server
 server <- function(input, output, session) {
+  
+  # Reactive expression to filter airports based on selected country
+  filtered_data <- reactive({
+    if (input$country == "All countries") {
+      all_data
+    } else {
+      all_data %>% filter(Country_origin == input$country)
+    }
+  })
+  
+  # Reactive expression to determine valid origin choices based on selected number of destinations
+  valid_origins <- reactive({
+    req(input$destinations)  # Ensure input$destinations is available
+    
+    filtered_data() %>%
+      group_by(city) %>%
+      filter(n_distinct(destination) >= input$destinations) %>%
+      pull(city) %>%
+      unique() %>%
+      sort()
+  })
+  
+  # Update origin choices based on valid_origins reactive expression
+  observe({
+    new_choices <- valid_origins()
+    selected_origin <- input$origin
+    
+    if (!(selected_origin %in% new_choices)) {
+      selected_origin <- new_choices[1]
+    }
+    
+    isolate({
+      updateSelectizeInput(session, "origin", 
+                           choices = new_choices,
+                           selected = selected_origin)
+    })
+  })
+  
+  # Reactive expression to filter data based on selected origin and slider value
   Dataframe2 <- reactive({
-    all_data %>% filter(city == input$origin)
+    req(input$origin)  # Ensure input$origin is available
+    
+    data <- filtered_data() %>% filter(city == input$origin)
+    
+    # Filter based on number of destinations
+    if (!is.null(input$destinations)) {
+      data <- data %>% group_by(city) %>% filter(n_distinct(destination) >= input$destinations)
+    }
+    
+    data
   })
   
   output$map <- renderLeaflet({
     data <- Dataframe2()
+    
+    if (nrow(data) == 0) {
+      return(NULL)  # No data to plot, return NULL
+    }
     
     df2 <- gcIntermediate(as.matrix(data[,c("Longitude_origin", "Latitude_origin")]),
                           as.matrix(data[,c("Longitude_dest", "Latitude_dest")]),
@@ -93,4 +153,3 @@ server <- function(input, output, session) {
 
 # Run the application 
 shinyApp(ui = ui, server = server)
-
