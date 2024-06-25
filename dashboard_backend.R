@@ -1,4 +1,5 @@
 library(shiny)
+library(shinyjs)
 library(leaflet)
 library(dplyr)
 library(geosphere)
@@ -34,9 +35,9 @@ all_data <- na.omit(all_data_filtered)
 
 # Adjust city names for encoding issues
 all_data$city <- dplyr::recode(all_data$city,
-                               "�-stersund, Sweden" = "Oestersund, Sweden",
-                               "�"ngelholm, Sweden" = "Aengelholm, Sweden",
-                               "�???orlu, Turkey" = "Corlu, Turkey")
+                               "Ã–stersund, Sweden" = "Oestersund, Sweden",
+                               "Ã„ngelholm, Sweden" = "Aengelholm, Sweden",
+                               "Ã‡orlu, Turkey" = "Corlu, Turkey")
 
 to_radians <- function(degrees) {
   return(degrees * pi / 180)
@@ -62,6 +63,7 @@ haversine <- function(lat1, lon1, lat2, lon2) {
 
 # Shiny UI
 ui <- bootstrapPage(
+  useShinyjs(),
   tags$style(type = "text/css", "html, body {width:100%;height:100%}"),
   leafletOutput("map", width = "100%", height = "100%"),
   absolutePanel(top = 60, right = 10,
@@ -79,7 +81,8 @@ ui <- bootstrapPage(
                 radioButtons("flight_type", "Flight Type",
                              choices = list("National" = "national", "International" = "international", "Both" = "both"),
                              selected = "both"),
-                textInput("distance_output", "Distance"),
+                div(style = "background-color: white; padding: 10px; border-radius: 5px; border: 1px solid #ccc; margin-bottom: 10px;",
+                  textOutput("distance_output")),
                 numericInput("max_distance", "Max Distance (km)", value = 20000, min = 0, step = 100),
                 style = "opacity: 0.65; z-index: 1000;")
 )
@@ -104,6 +107,37 @@ server <- function(input, output, session) {
     
     dest_choices <- c("All", dest_choices)
     updateSelectInput(session, "destination", choices = dest_choices, selected = dest_choices[1])
+  })
+  
+  # Reactive expression to calculate distance between selected origin and destination
+  calculate_distance <- reactive({
+    if (input$destination != "All" && !is.null(input$destination) && input$destination != "") {
+      origin_coords <- filtered_data() %>%
+        filter(city == input$origin) %>%
+        select(Latitude_origin, Longitude_origin) %>%
+        slice(1)
+      
+      dest_coords <- all_data %>%
+        filter(paste(City_dest, ", ", Country_dest, sep = "") == input$destination) %>%
+        select(Latitude_dest, Longitude_dest) %>%
+        slice(1)
+      
+      if (nrow(origin_coords) > 0 && nrow(dest_coords) > 0) {
+        distance <- haversine(origin_coords$Latitude_origin, origin_coords$Longitude_origin, dest_coords$Latitude_dest, dest_coords$Longitude_dest)
+        return(distance)
+      }
+    }
+    return(NULL)
+  })
+  
+  # Update distance output
+  output$distance_output <- renderText({
+    distance <- calculate_distance()
+    if (!is.null(distance)) {
+      paste("Distance:", round(distance, 2), "km")
+    } else {
+      "Distance: N/A"
+    }
   })
   
   # observeEvent(input$destination, {
@@ -189,6 +223,39 @@ server <- function(input, output, session) {
     }
     
     return(data)
+  })
+  
+  observe({
+    data <- Dataframe2()
+    
+    national_available <- data %>%
+      filter(Country_origin == Country_dest) %>%
+      nrow() > 0
+    
+    international_available <- data %>%
+      filter(Country_origin != Country_dest) %>%
+      nrow() > 0
+    
+    print(paste("National available:", national_available))
+    print(paste("International available:", international_available))
+    
+    if (national_available && international_available) {
+      enable("national")  # Enable the "National" radio button
+      enable("international")  # Enable the "International" radio button
+      enable("both")  # Enable the "Both" radio button
+    } else if (national_available) {
+      enable("national")  # Enable the "National" radio button
+      disable("international") # Disable the "International" radio button
+      disable("both") # Disable the "Both" radio button
+    } else if (international_available) {
+      disable("national") # Disable the "National" radio button
+      enable("international")  # Enable the "International" radio button
+      disable("both") # Disable the "Both" radio button
+    } else {
+      disable("national") # Disable the "National" radio button
+      disable("international") # Disable the "International" radio button
+      disable("both") # Disable the "Both" radio button
+    }
   })
   
   output$map <- renderLeaflet({
