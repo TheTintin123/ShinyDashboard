@@ -55,6 +55,12 @@ haversine <- function(lat1, lon1, lat2, lon2) {
   return(distance)  # Distance in kilometers
 }
 
+# Calculate distance for each flight
+all_data <- all_data %>%
+  rowwise() %>%
+  mutate(distance = haversine(Latitude_origin, Longitude_origin, Latitude_dest, Longitude_dest))
+
+
 # Shiny UI
 ui <- bootstrapPage(
   useShinyjs(),
@@ -80,7 +86,7 @@ ui <- bootstrapPage(
                              selected = "both"),
                 div(style = "background-color: white; padding: 10px; border-radius: 5px; border: 1px solid #ccc; margin-bottom: 10px;",
                   textOutput("distance_output")),
-                numericInput("max_distance", "Max Distance (km)", value = 20000, min = 0, step = 100),
+                sliderInput("max_distance", "Maximum Distance (km)", min = 1, max=20000, value = 100, step = 50),
                 style = "opacity: 0.65; z-index: 1000;")
 )
 
@@ -105,71 +111,59 @@ server <- function(input, output, session) {
     
     dest_choices <- c("All", dest_choices)
     updateSelectInput(session, "destination", choices = dest_choices, selected = dest_choices[1])
+    
+    # Update max_distance input range based on selected origin
+    origin_data <- all_data %>% filter(city == input$origin)
+    if(nrow(origin_data) > 0){
+      min_dist <- min(origin_data$distance, na.rm = TRUE)
+      max_dist <- max(origin_data$distance, na.rm = TRUE)
+      updateSliderInput(session, "max_distance", min = ceiling(min_dist), max = ceiling(max_dist), value = ceiling(max_dist), step = 50)
+    }
   })
   
-  # Reactive expression to calculate distance between selected origin and destination
-  calculate_distance <- reactive({
-    if (input$destination != "All" && !is.null(input$destination) && input$destination != "") {
-      origin_coords <- filtered_data() %>%
-        filter(city == input$origin) %>%
-        select(Latitude_origin, Longitude_origin) %>%
-        slice(1)
+  observeEvent(input$destination, {
+    if (input$destination != "All") {
+      # Set the slider to the specific distance and disable it
+      destination_data <- all_data %>%
+        filter(city == input$origin, paste(City_dest, ", ", Country_dest, sep = "") == input$destination) %>%
+        select(distance) %>%
+        slice(1) %>%
+        pull(distance)
       
-      dest_coords <- all_data %>%
-        filter(paste(City_dest, ", ", Country_dest, sep = "") == input$destination) %>%
-        select(Latitude_dest, Longitude_dest) %>%
-        slice(1)
-      
-      if (nrow(origin_coords) > 0 && nrow(dest_coords) > 0) {
-        distance <- haversine(origin_coords$Latitude_origin, origin_coords$Longitude_origin, dest_coords$Latitude_dest, dest_coords$Longitude_dest)
-        return(distance)
+      if (!is.null(destination_data)) {
+        updateSliderInput(session, "max_distance", min = ceiling(destination_data), max = ceiling(destination_data), value = ceiling(destination_data), step = 50)
+        shinyjs::disable("max_distance")
+      }
+    } else {
+      # Re-enable the slider and reset its range based on the selected origin
+      origin_data <- all_data %>% filter(city == input$origin)
+      if (nrow(origin_data) > 0) {
+        min_dist <- min(origin_data$distance, na.rm = TRUE)
+        max_dist <- max(origin_data$distance, na.rm = TRUE)
+        updateSliderInput(session, "max_distance", min = ceiling(min_dist), max = ceiling(max_dist), value = ceiling(max_dist), step = 50)
+        shinyjs::enable("max_distance")
       }
     }
-    return(NULL)
   })
   
-  # Update distance output
+  # Update distance output using pre-calculated distance
   output$distance_output <- renderText({
-    distance <- calculate_distance()
-    if (!is.null(distance)) {
-      paste("Distance:", round(distance, 2), "km")
+    if (input$destination != "All" && !is.null(input$destination) && input$destination != "") {
+      distance <- all_data %>%
+        filter(city == input$origin, paste(City_dest, ", ", Country_dest, sep = "") == input$destination) %>%
+        select(distance) %>%
+        slice(1) %>%
+        pull(distance)
+      
+      if (!is.null(distance)) {
+        paste("Distance:", round(distance, 2), "km")
+      } else {
+        "Distance: Please select a destination"
+      }
     } else {
-      "Distance: N/A"
+      "Distance: Please select a destination"
     }
   })
-  
-  # observeEvent(input$destination, {
-  #   if(input$destination != "All" && input$destination != ""){
-  #     splitter1 <- strsplit(input$origin, ",")[[1]][1]
-  #     splitter2 <- strsplit(input$destination, ",")[[1]][1]
-  #     
-  #     origin_coords <- all_data %>%
-  #       filter(City_origin == input$origin) %>%
-  #       select(Latitude_origin, Longitude_origin) %>%
-  #       slice(1)  # Assuming there is only one origin match
-  #     
-  #     print(origin_coords)
-  #     
-  #     dest_coords <- all_data %>%
-  #       filter(City_dest == input$destination) %>%
-  #       select(Latitude_dest, Longitude_dest) %>%
-  #       slice(1)  # Assuming there is only one destination match
-  #     
-  #     # print(dest_coords)
-  #   
-  #     if (nrow(origin_coords) > 0 & nrow(dest_coords) > 0) {
-  #       # Calculate distance using haversine function
-  #       distance <- haversine(origin_coords$Latitude_origin, 
-  #                             origin_coords$Longitude_origin, 
-  #                             dest_coords$Latitude_dest, 
-  #                             dest_coords$Longitude_dest)
-  #       
-  #       print(paste("Distance from", splitter1, "to", splitter2, "is", distance, "km"))
-  #     } else {
-  #       print("Error: Could not find coordinates for origin or destination.")
-  #     }
-  #   }
-  # })
   
   # Reactive expression to determine valid origin choices based on selected number of destinations
   valid_origins <- reactive({
@@ -219,6 +213,8 @@ server <- function(input, output, session) {
     } else if (input$flight_type == "international") {
       data <- data %>% filter(Country_origin != Country_dest)
     }
+    
+    data <- data %>% filter(distance <= input$max_distance)
     
     return(data)
   })
